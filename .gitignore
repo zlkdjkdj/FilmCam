@@ -1,0 +1,21 @@
+# 로컬 환경 (내 PC 경로가 들어 있음)
+local.properties
+.gradle/
+.kotlin/
+build/
+app/build/
+.idea/
+*.iml
+
+# 서명 키 / 비밀 값 (실수로 커밋 방지)
+*.jks
+*.keystore
+*.p12
+*.pem
+keystore.properties
+google-services.json
+.env
+
+# 빌드 산출물 (릴리스 페이지에 올리고 저장소에는 넣지 않기)
+*.apk
+*.aab
