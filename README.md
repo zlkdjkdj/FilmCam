@@ -144,6 +144,11 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - 필름 색감은 수치로 재현한 것이어서 실제 필름 스캔과 똑같지는 않습니다.
 - 디버그 키로 서명되어 있어 스토어 배포용이 아닙니다.
 
+## Trademarks
+
+Kodak, Portra, Ektar, Tri-X, Fujifilm, Velvia, Polaroid, Ilford, CineStill, Lomography 등 필름과 카메라 이름은 각 소유자의 상표입니다.
+이 프로젝트는 그들과 관련이 없고 후원이나 보증을 받지 않았습니다. 필름 이름은 어떤 느낌을 겨냥했는지 알려 주려는 설명용 표기이고, 색감은 직접 만든 수치입니다.
+
 ## License
 
 [MIT](LICENSE)
