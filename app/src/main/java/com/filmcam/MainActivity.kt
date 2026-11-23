@@ -113,6 +113,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         })
+        handleIncoming(intent)
         if (hasPermission(Manifest.permission.CAMERA)) {
             startRenderer()
         } else {
@@ -126,6 +127,23 @@ class MainActivity : ComponentActivity() {
         outState.putBoolean("video", videoMode)
         outState.putInt("stamp", stampMode)
         outState.putInt("filter", strip.selected)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handleIncoming(intent)
+    }
+
+    /** 갤러리의 공유/열기로 들어온 사진은 바로 편집 화면으로 연다. */
+    @Suppress("DEPRECATION")
+    private fun handleIncoming(intent: android.content.Intent?) {
+        intent ?: return
+        val uri: Uri? = when (intent.action) {
+            android.content.Intent.ACTION_SEND -> intent.getParcelableExtra(android.content.Intent.EXTRA_STREAM)
+            android.content.Intent.ACTION_VIEW -> intent.data
+            else -> null
+        }
+        if (uri != null && intent.type?.startsWith("image/") == true) openEditor(uri)
     }
 
     /** 화면을 돌려도 액티비티를 다시 만들지 않는다. 레이아웃 위치만 바뀌고 카메라는 계속 돈다. */
