@@ -183,3 +183,28 @@ fun Context.textButton(label: String, onClick: () -> Unit): TextView = TextView(
     background = pill(CHIP_BG, 18)
     setOnClickListener { onClick() }
 }
+
+/** 3분할 격자선. */
+class GridView(ctx: Context) : View(ctx) {
+    private val shade = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0x30000000
+        strokeWidth = ctx.dp(3).toFloat()
+    }
+    private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xAAFFFFFF.toInt()
+        strokeWidth = max(1f, ctx.dp(1).toFloat() * 0.8f)
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        val w = width.toFloat()
+        val h = height.toFloat()
+        for (i in 1..2) {
+            val x = w * i / 3f
+            val y = h * i / 3f
+            canvas.drawLine(x, 0f, x, h, shade)
+            canvas.drawLine(0f, y, w, y, shade)
+            canvas.drawLine(x, 0f, x, h, line)
+            canvas.drawLine(0f, y, w, y, line)
+        }
+    }
+}

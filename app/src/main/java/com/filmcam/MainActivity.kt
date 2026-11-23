@@ -14,6 +14,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
+import android.view.ScaleGestureDetector
 import android.view.Surface
 import android.view.TextureView
 import android.view.View
@@ -29,6 +30,11 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.AspectRatio
+import androidx.camera.core.Camera
+import androidx.camera.core.ZoomState
+import androidx.camera.core.resolutionselector.ResolutionStrategy
+import androidx.lifecycle.LiveData
+import android.util.Size
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -52,6 +58,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var textureView: TextureView
     private lateinit var shutter: ShutterView
     private lateinit var stampBtn: TextView
+    private lateinit var gridBtn: TextView
+    private lateinit var resBtn: TextView
+    private lateinit var gridView: GridView
+    private lateinit var zoomPill: TextView
     private lateinit var filterLabel: TextView
     private lateinit var flash: View
     private lateinit var strip: FilterStrip
@@ -62,6 +72,17 @@ class MainActivity : ComponentActivity() {
     private var renderer: CameraRenderer? = null
     private var provider: ProcessCameraProvider? = null
     private var imageCapture: ImageCapture? = null
+    private var camera: Camera? = null
+    private var zoomLive: LiveData<ZoomState>? = null
+    private var curZoom = 1f
+    private var minZoom = 1f
+    private var maxZoom = 1f
+    private var keepZoom = 1f
+
+    private val prefs by lazy { getSharedPreferences("filmcam", MODE_PRIVATE) }
+    private var gridOn = true
+    /** 0 = 낮음(약 3MP), 1 = 표준(12MP), 2 = 최대(기기가 지원하는 최대, S25는 50MP) */
+    private var resLevel = 1
 
     private var front = false
     private var videoMode = false
@@ -102,6 +123,8 @@ class MainActivity : ComponentActivity() {
             stampMode = it.getInt("stamp", DateStamp.MODE_DATE)
             savedFilter = it.getInt("filter", Filters.DEFAULT_INDEX)
         }
+        gridOn = prefs.getBoolean("grid", true)
+        resLevel = prefs.getInt("res", 1).coerceIn(0, 2)
         buildUi()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -186,23 +209,47 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(14), dp(12), 0, 0)
         }
         frame.addView(filterLabel, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START))
+        gridView = GridView(this)
+        frame.addView(gridView, FrameLayout.LayoutParams(-1, -1))
         flash = View(this).apply { setBackgroundColor(Color.WHITE); alpha = 0f }
         frame.addView(flash, FrameLayout.LayoutParams(-1, -1))
+        zoomPill = TextView(this).apply {
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setPadding(dp(14), dp(6), dp(14), dp(6))
+            background = pill(0x99000000.toInt(), 16)
+            setOnClickListener { setZoom(1f) }
+        }
+        frame.addView(zoomPill, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+            bottomMargin = dp(46)
+        })
+        val pinch = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(d: ScaleGestureDetector): Boolean {
+                setZoom(curZoom * d.scaleFactor)
+                return true
+            }
+        })
+        frame.setOnTouchListener { _, e -> pinch.onTouchEvent(e); true }
 
         // 상단 바
-        val top = FrameLayout(this)
+        val top = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         top.addView(TextView(this).apply {
             text = "FILMCAM"
-            textSize = 16f
-            letterSpacing = 0.25f
+            textSize = 15f
+            letterSpacing = 0.2f
             setTextColor(AMBER)
             setPadding(dp(16), 0, 0, 0)
             gravity = Gravity.CENTER_VERTICAL
-        }, FrameLayout.LayoutParams(-2, -1))
+            maxLines = 1
+        }, LinearLayout.LayoutParams(0, -1, 1f))
+        gridBtn = textButton("") { toggleGrid() }
+        resBtn = textButton("") { cycleResolution() }
         stampBtn = textButton("") { cycleStamp() }
-        top.addView(stampBtn, FrameLayout.LayoutParams(-2, dp(36), Gravity.END or Gravity.CENTER_VERTICAL).apply {
-            marginEnd = dp(12)
-        })
+        listOf(gridBtn, resBtn, stampBtn).forEachIndexed { i, b ->
+            b.textSize = 13f
+            b.setPadding(dp(11), dp(6), dp(11), dp(6))
+            top.addView(b, LinearLayout.LayoutParams(-2, dp(34)).apply { marginEnd = if (i == 2) dp(12) else dp(6) })
+        }
 
         strip = FilterStrip(this) { f -> setFilter(f) }
 
@@ -231,6 +278,9 @@ class MainActivity : ComponentActivity() {
         filterLabel.text = Filters.ALL[savedFilter].name
         refreshStampLabel()
         refreshModeTabs()
+        refreshGrid()
+        refreshResLabel()
+        updateZoomPill()
     }
 
     private fun modeTab(label: String, onClick: () -> Unit) = TextView(this).apply {
@@ -280,6 +330,74 @@ class MainActivity : ComponentActivity() {
         refreshStampLabel()
     }
 
+    private fun toggleGrid() {
+        gridOn = !gridOn
+        prefs.edit().putBoolean("grid", gridOn).apply()
+        refreshGrid()
+    }
+
+    private fun refreshGrid() {
+        gridView.visibility = if (gridOn) View.VISIBLE else View.GONE
+        gridBtn.text = if (gridOn) "격자 ON" else "격자 OFF"
+        gridBtn.setTextColor(if (gridOn) 0xFFFF8A1F.toInt() else Color.WHITE)
+    }
+
+    private fun cycleResolution() {
+        if (recording) return
+        resLevel = (resLevel + 1) % 3
+        prefs.edit().putInt("res", resLevel).apply()
+        refreshResLabel()
+        toast(
+            when (resLevel) {
+                0 -> "사진 약 3MP · 영상 HD (720p)"
+                1 -> "사진 12MP · 영상 FHD (1080p)"
+                else -> "사진 최대 해상도 · 영상 FHD (1080p)"
+            },
+        )
+        keepZoom = curZoom
+        bindCamera()
+    }
+
+    private fun refreshResLabel() {
+        resBtn.text = when (resLevel) {
+            0 -> "3MP"
+            1 -> "12MP"
+            else -> "MAX"
+        }
+        resBtn.setTextColor(if (resLevel == 1) Color.WHITE else 0xFFFF8A1F.toInt())
+        renderer?.videoShortSide = if (resLevel == 0) 720 else 1080
+    }
+
+    /** 렌즈 전환 없이 한 카메라의 줌만 쓴다 (1배 ~ 최대 10배). */
+    private fun setZoom(ratio: Float) {
+        val cam = camera ?: return
+        val lo = max(1f, minZoom)
+        val hi = minOf(10f, maxZoom)
+        if (hi < lo) return
+        cam.cameraControl.setZoomRatio(ratio.coerceIn(lo, hi))
+    }
+
+    private fun updateZoomPill() {
+        zoomPill.text = String.format(Locale.US, "%.1f×", curZoom)
+        zoomPill.setTextColor(if (curZoom > 1.05f) AMBER else Color.WHITE)
+    }
+
+    private fun captureSelector(): ResolutionSelector {
+        val b = ResolutionSelector.Builder()
+            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+        when (resLevel) {
+            0 -> b.setResolutionStrategy(
+                ResolutionStrategy(Size(1920, 1440), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER),
+            )
+            1 -> b.setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+            else -> {
+                b.setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+                b.setAllowedResolutionMode(ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE)
+            }
+        }
+        return b.build()
+    }
+
     private fun setFilter(f: FilmFilter) {
         renderer?.filter = f
         filterLabel.text = f.name
@@ -305,6 +423,7 @@ class MainActivity : ComponentActivity() {
             it.deviceRotation = deviceAngle()
             it.mirror = false
             it.frontCamera = front
+            it.videoShortSide = if (resLevel == 0) 720 else 1080
         }
     }
 
@@ -323,7 +442,7 @@ class MainActivity : ComponentActivity() {
                 .build()
             preview.setSurfaceProvider(mainExecutor) { req -> r.provide(req, mainExecutor) }
             val capture = ImageCapture.Builder()
-                .setResolutionSelector(rs)
+                .setResolutionSelector(captureSelector())
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                 .setTargetRotation(Surface.ROTATION_0)
                 .build()
@@ -334,7 +453,21 @@ class MainActivity : ComponentActivity() {
             val selector = if (front) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
             try {
                 p.unbindAll()
-                p.bindToLifecycle(this, selector, preview, capture)
+                zoomLive?.removeObservers(this)
+                val cam = p.bindToLifecycle(this, selector, preview, capture)
+                camera = cam
+                val live = cam.cameraInfo.zoomState
+                zoomLive = live
+                live.observe(this) { zs ->
+                    curZoom = zs.zoomRatio
+                    minZoom = zs.minZoomRatio
+                    maxZoom = zs.maxZoomRatio
+                    updateZoomPill()
+                }
+                if (keepZoom > 1.05f) {
+                    cam.cameraControl.setZoomRatio(keepZoom.coerceIn(max(1f, cam.cameraInfo.zoomState.value?.minZoomRatio ?: 1f), minOf(10f, cam.cameraInfo.zoomState.value?.maxZoomRatio ?: 1f)))
+                }
+                keepZoom = 1f
             } catch (t: Throwable) {
                 Log.e("FilmCam", "bind failed", t)
                 toast("카메라를 열 수 없습니다")
@@ -344,6 +477,7 @@ class MainActivity : ComponentActivity() {
 
     private fun flipCamera() {
         front = !front
+        keepZoom = 1f
         bindCamera()
     }
 
@@ -375,18 +509,15 @@ class MainActivity : ComponentActivity() {
                 val takenAt = System.currentTimeMillis()
                 bg.execute {
                     try {
-                        var bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                        if (rot != 0) {
-                            val m = Matrix().apply { postRotate(rot.toFloat()) }
-                            val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
-                            bmp.recycle()
-                            bmp = rotated
-                        }
-                        val out = FilterProcessor.process(bmp, filter, DateStamp.text(mode, takenAt), (takenAt % 97).toFloat())
-                        bmp.recycle()
+                        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        val out = FilterProcessor.process(
+                            bmp, filter, DateStamp.text(mode, takenAt), (takenAt % 97).toFloat(),
+                            rotation = rot, recycleSource = true,
+                        )
+                        val size = "${out.width}x${out.height}"
                         MediaSaver.savePhoto(this@MainActivity, out, takenAt)
                         out.recycle()
-                        runOnUiThread { toast("저장됨 · ${filter.name}") }
+                        runOnUiThread { toast("저장됨 · ${filter.name} · $size") }
                     } catch (t: Throwable) {
                         Log.e("FilmCam", "photo failed", t)
                         runOnUiThread { toast("사진 저장 실패") }

@@ -59,6 +59,8 @@ class CameraRenderer(
     @Volatile var frontVariant: Int = 0
     /** 기기가 시계방향으로 돈 각도(0/90/180/270). 장면은 항상 바로 선 채로 보이고 저장된다. */
     @Volatile var deviceRotation: Int = 0
+    /** 3초 영상의 짧은 변 (720 또는 1080) */
+    @Volatile var videoShortSide: Int = 1080
     private var recDev = 0
     private var recTsOffset = Long.MIN_VALUE
     private var recW = 1080
@@ -250,8 +252,10 @@ class CameraRenderer(
                 recDev = deviceRotation
                 recTsOffset = Long.MIN_VALUE
                 val land = recDev == 90 || recDev == 270
-                recW = if (land) 1440 else 1080
-                recH = if (land) 1080 else 1440
+                val short = videoShortSide
+                val long = short * 4 / 3
+                recW = if (land) long else short
+                recH = if (land) short else long
                 mr = if (Build.VERSION.SDK_INT >= 31) MediaRecorder(ctx) else @Suppress("DEPRECATION") MediaRecorder()
                 if (withAudio) mr.setAudioSource(MediaRecorder.AudioSource.CAMCORDER)
                 mr.setVideoSource(MediaRecorder.VideoSource.SURFACE)
@@ -260,7 +264,7 @@ class CameraRenderer(
                 mr.setVideoEncoder(MediaRecorder.VideoEncoder.H264)
                 mr.setVideoSize(recW, recH)
                 mr.setVideoFrameRate(30)
-                mr.setVideoEncodingBitRate(16_000_000)
+                mr.setVideoEncodingBitRate(if (videoShortSide <= 720) 9_000_000 else 16_000_000)
                 if (withAudio) {
                     mr.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                     mr.setAudioEncodingBitRate(128_000)

@@ -362,9 +362,17 @@ object FilterProcessor {
     )
 
     @Synchronized
-    fun process(src: Bitmap, filter: FilmFilter, stampText: String?, seed: Float = 7f): Bitmap {
-        val w = src.width
-        val h = src.height
+    /**
+     * @param rotation 사진을 바로 세우려고 시계방향으로 돌려야 하는 각도 (0/90/180/270). GPU에서 처리해 비트맵 복사본을 만들지 않는다.
+     * @param recycleSource true면 GPU로 올린 직후 원본 비트맵을 해제해 메모리를 아낀다.
+     */
+    fun process(
+        src: Bitmap, filter: FilmFilter, stampText: String?, seed: Float = 7f,
+        rotation: Int = 0, recycleSource: Boolean = false,
+    ): Bitmap {
+        val swap = rotation == 90 || rotation == 270
+        val w = if (swap) src.height else src.width
+        val h = if (swap) src.width else src.height
         val egl = EglCore()
         val pb = egl.pbuffer(1, 1)
         egl.makeCurrent(pb)
@@ -378,6 +386,7 @@ object FilterProcessor {
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, ids[0])
             texParams()
             GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, src, 0)
+            if (recycleSource) src.recycle()
 
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, ids[1])
             texParams()
@@ -400,7 +409,14 @@ object FilterProcessor {
             GLES30.glClearColor(0f, 0f, 0f, 1f)
             GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
             // flipY=-1: 읽어낸 첫 행이 화면 위쪽이 되도록 뒤집어 그린다.
-            pipe.drawMain(ids[0], FLIP_V, -1f, filter, w, h, seed)
+            val texMat = FloatArray(16)
+            System.arraycopy(FLIP_V, 0, texMat, 0, 16)
+            if (rotation != 0) {
+                android.opengl.Matrix.translateM(texMat, 0, 0.5f, 0.5f, 0f)
+                android.opengl.Matrix.rotateM(texMat, 0, rotation.toFloat(), 0f, 0f, 1f)
+                android.opengl.Matrix.translateM(texMat, 0, -0.5f, -0.5f, 0f)
+            }
+            pipe.drawMain(ids[0], texMat, -1f, filter, w, h, seed)
             if (stampText != null) {
                 stamp.ensure(stampText, w, h)
                 pipe.drawStamp(stamp.id, stamp.rect(w, h), -1f)
